@@ -1,0 +1,268 @@
+
+
+http://support.sas.com/documentation/cdl/en/statug/65328/HTML/default/viewer.htm#statug_cluster_gettingstarted.htm
+
+http://www.utdallas.edu/~nkumar/ClusterExample.doc
+
+http://duoduo2011.blogspot.in/2011/11/proc-cluster-and-proc-fastclus.html
+
+http://www.ats.ucla.edu/stat/sas/library/factor_ut.htm
+
+http://www.ats.ucla.edu/stat/sas/output/principal_components.htm
+
+
+
+
+hierarchical lustering explained in detail
+
+http://www.okstate.edu/sas/v8/saspdf/stat/chap23.pdf - must
+
+
+
+http://www.utdallas.edu/~nkumar/ClusterExample.doc
+
+https://support.sas.com/documentation/cdl/en/statug/63033/HTML/default/viewer.htm#statug_fastclus_sect021.htm - outlier treatment in k means
+
+http://support.sas.com/resources/papers/proceedings13/068-2013.pdf 
+
+ link for doughnut clustering 
+
+http://www.cob.unt.edu/itds/courses/dsci4520/handouts/prospect_clust_hw5_2012.pdf - clustering in sas e miner
+
+
+fuzzy clustering:
+
+https://support.sas.com/resources/papers/proceedings14/SAS133-2014.pdf
+
+
+
+
+k means in sas e miner:
+
+http://pegasus.cc.ucf.edu/~cwang/sta6714/Lecture7/Notes/Clustering
+
+https://support.sas.com/documentation/onlinedoc/miner/casestudy_59123.pdf
+
+community.mis.temple.edu/.../files/.../Clustering-and-Segmentation.doc
+
+
+
+
+
+
+
+
+
+
+
+/*   Standardizing the variables for clustering*/
+
+     proc standard data=regression mean=0 std=1 out=standardized;
+
+     var 
+
+     Average_of_km_per_drop 
+
+     customers 
+
+     population 
+
+     postcodes 
+
+     vehicles;
+
+     run;
+
+ 
+
+/*   Elbow curve and clustering begins here*/
+
+           /*Macro for finding optimum number of clusters*/
+
+     %let store_count=15;
+
+     %macro mac ;
+
+     data budget.test_all;
+
+     run;
+
+     data budget.ccc_all;
+
+     run;
+
+     %do i = 1 %to &store_count.;
+
+     proc fastclus data =  standardized outstat= budget.ccc out = budget.ds2 maxclusters = &i. maxiter=1000;
+
+     var
+
+     Average_of_km_per_drop 
+
+     customers 
+
+     population 
+
+     postcodes 
+
+     vehicles
+
+     ;
+
+     ods output "Statistics for Variables" = budget.test ;
+
+     run;
+
+     data budget.test;
+
+     set budget.test;
+
+     cluster_num = &i.;
+
+     run;
+
+     data budget.ccc;
+
+     set budget.ccc;
+
+     cluster_num = &i.;
+
+     run;
+
+     data budget.ccc;
+
+     set budget.ccc;
+
+     where _type_ in ("CCC","RSQ");
+
+     RUN;
+
+     data budget.test_all;
+
+     set budget.test_all budget.test;
+
+     run;
+
+     data budget.ccc_all;
+
+     set budget.ccc_all budget.ccc;
+
+     run;
+
+     %end;
+
+     proc delete data=budget.test;
+
+     run;
+
+     proc delete data=budget.ccc;
+
+     run;
+
+     %mend;
+
+     %mac;
+
+     /*Elbow curve*/
+
+     data budget.elbow_all;
+
+     set budget.test_all;  /*test_all is the data set which we get from above iterative
+
+fas-clus procedure*/
+
+     metric = WithinStd/(1-WithinStd); 
+
+     metric1= 1/rsqratio;
+
+/*   keep Cluster_Num WithinSTD variable Metric;*/
+
+     where variable = "OVER-ALL"; /* overall means we need this metric for each
+
+cluster as a whole and not for each store(datapoints))*/
+
+     run; 
+
+/*Running the clustering procedure*/
+
+     proc fastclus data =  standardized  outseed= budget.segment_refresh_seeds outstat= budget.ccc 
+
+     out = budget.store_with_cluster maxclusters = 5 maxiter=1000;
+
+     var
+
+     Average_of_km_per_drop 
+
+     customers 
+
+     population 
+
+     postcodes 
+
+     vehicles;
+
+     ods output "Statistics for Variables" = budget.test ;
+
+     run;
+
+     data cluster;
+
+     set budget.store_with_cluster(keep=store cluster);
+
+     run;
+
+     proc sort data=cluster;
+
+     by store;
+
+     run;
+
+/*   Merging the cluster back with the original dataset*/
+
+     proc sort data=regression;
+
+     by store;
+
+     run;
+
+     data budget.kmeans_results;
+
+     merge regression (in=a) cluster(in=b);
+
+     by store;
+
+     if a and b;
+
+     run;
+
+     proc sql;
+
+     create table store_count as 
+
+     select cluster, count(store)
+
+     from budget.kmeans_results
+
+     group by 1;
+
+     run;
+
+     proc sql;
+
+     create table cluster_summary as 
+
+     select cluster, avg(population) as avg_population, min(population) as min_population, max(population) as ma_population,
+
+     avg(customers) as avg_customers, min(customers) as min_customers, max(customers) as max_customers as max_customers,
+
+     avg(postcodes) as avg_postcodes, min(postcodes) as min_post_codes, max(postcodes) as max_postcode,
+
+     avg(vehicles) as avg_vehicles, min(vehicles) as min_vehicles, max(vehicles) as max_vehicles,
+
+     avg(Average_of_km_per_drop) as avg_kmpd, min(Average_of_km_per_drop ) as min_Average_of_km_per_drop , max(Average_of_km_per_drop ) as max_Average_of_km_per_drop 
+
+     from budget.kmeans_results
+
+     group by 1;
+
+     run;
