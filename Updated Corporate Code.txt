@@ -1,0 +1,558 @@
+
+/*DECLARE LIBRARIES*/
+
+libname lib_ae "H:\Territory Master\AE";
+libname lib_sa "H:\Territory Master\SA";
+libname lib_bh "H:\Territory Master\BH";
+libname lib_kw "H:\Territory Master\KW";
+libname lib_jo "H:\Territory Master\JO";
+libname lib_om "H:\Territory Master\OM";
+libname lib_qa "H:\Territory Master\QA";
+libname lib_mast "H:\Territory Master\Master";
+options compress=yes;
+
+libname lib_ic "H:\Corporate Analysis\Iconic2"; /*----> CONCEPT LIBRARY   */
+
+
+/*GLOBAL MACRO VARIABLES*/
+%let prefix=IC;
+%let lib=lib_ic;
+%let concept="Iconic";
+%let timeperiod=_TRAN_JUL12_MAR13;
+%let rfm_period=APR12_MAR13;
+%let new_mbr=lib_mast.LMG_NEW_MBRS_24_04_13;
+%let new_mbr_LMG=lib_mast.NEW_ENROLMENTS_YTD_MARCH_2013;
+%let min_date='01JUL2012'd;
+%let max_date='31MAR2013'd;
+
+
+data &lib..&prefix._mbr_tran;
+set lib_ae.ae&timeperiod.;
+where compress(concept_CP)=compress(&concept.);
+run;
+
+%macro datacreation(country);
+
+data &country._mbr_tran;
+set lib_&country..&country.&timeperiod.;
+where compress(concept_CP)=compress(&concept.);
+run;
+
+proc append base=&lib..&prefix._mbr_tran data=&country._mbr_tran force;
+run;
+
+%mend;
+
+%datacreation(JO);
+%datacreation(KW);
+%datacreation(QA);
+%datacreation(BH);
+%datacreation(SA);
+%datacreation(OM);
+
+proc freq data=&lib..&prefix._mbr_tran;
+tables country;
+run;
+
+
+/*CALCULATING THE NUMBER OF STORES FOR EACH TERRITORY*/
+proc freq data=lib_mast.OVERALL_STORE_INFORMATION;
+tables country;
+where concept_CP=&concept.;
+run;
+
+/******************   MEMBER AFFINITY CODES   *********************/
+
+proc sql;
+create table &prefix._mbr_affinty as 
+select distinct country,
+count(distinct PrivilegeCustomerCode) as Members
+from &lib..&prefix._mbr_tran
+where compress(Concept_CP) = compress(&concept.)
+group by country;
+quit;
+
+proc sql;
+create table &lib..total_mbrs as
+select distinct country,
+count(distinct PrivilegeCustomerCode) as Total_Members
+from lib_ae.ae&timeperiod.
+group by country;
+quit;
+
+%macro total(country); 
+
+proc sql;
+create table &country._total_mbrs as
+select distinct country,
+count(distinct PrivilegeCustomerCode) as Total_Members
+from lib_&country..&country.&timeperiod.
+group by country;
+quit;
+
+proc append base=&lib..total_mbrs data=&country._total_mbrs;
+run;
+
+%mend;
+
+%total(JO);
+%total(KW);
+%total(QA);
+%total(BH);
+%total(SA);
+%total(OM);
+
+proc sql;
+create table &lib..&prefix._mbr_affinity_metric as
+select a.*,b.Total_Members,
+(a.Members/b.Total_Members) format 8.2 as Member_Pct
+from &prefix._mbr_affinty a left join &lib..total_mbrs b
+on a.country=b.country;
+quit;
+
+
+
+/****************CROSS CONCEPT CODE**************************/
+
+/* Find members enrolled in other concepts and target concepts*/
+/**/
+%macro crossconcept(country);
+ 
+PROC SQL;
+create table &country._tgt_concept_mbrs as
+select * from &new_mbr.
+where Compress(concept) eq compress(&concept.) and country="&country.";
+quit;
+
+PROC SQL;
+create table &country._other_concept_mbrs as
+select * from &new_mbr.
+where Compress(concept) ne compress(&concept.) and country="&country.";
+quit;
+
+PROC SQL;
+create table &country._other_concept_mbrs_in_tgt as
+select * from &country._other_concept_mbrs
+where compress(PrivilegeCustomerCode) in 
+(select compress(PrivilegeCustomerCode) from &lib..&prefix._mbr_tran where compress(country)="&country." and compress(concept)=compress(&concept.));
+quit;
+
+/* find metrics of members who enrolled in other concepts but shopped at target concept*/
+
+proc sql;
+create table &country._other_cncpt_mbrs_in_tgt_tran as
+select distinct PrivilegeCustomerCode,concept,
+sum(AmountCurrency) as spend,
+count(distinct tran_id) as transactions
+from &lib..&prefix._mbr_tran
+where compress(PrivilegeCustomerCode) in (select compress(PrivilegeCustomerCode) from &country._other_concept_mbrs_in_tgt)
+and compress(country)=compress("&country.")
+group by PrivilegeCustomerCode,concept;
+quit;
+
+proc sql;
+create table &country._other_cncpt_mbrs_in_tgt_e as
+select a.*, b.concept as Concept_enrolled
+from &country._other_cncpt_mbrs_in_tgt_tran a left join &country._other_concept_mbrs b
+on a.PrivilegeCustomerCode=b.PrivilegeCustomerCode;
+quit;
+
+proc sql;
+create table &lib..&country._cross_concept_metric as
+select distinct concept_enrolled,
+count(distinct PrivilegeCustomerCode) as members,
+sum(spend) as t_spend,
+sum(spend)/sum(transactions) as ATV
+from &country._other_cncpt_mbrs_in_tgt_e
+where compress(concept) eq compress(&concept.)
+group by concept_enrolled;
+quit;
+
+/* find metrics of members who enrolled in target concept */
+
+proc sql;
+create table &country.tgt_concept_mbr_tran as
+select distinct PrivilegeCustomerCode,concept,
+sum(AmountCurrency) as spend,
+count(distinct tran_id) as transactions
+from &lib..&prefix._mbr_tran
+where compress(PrivilegeCustomerCode) in (select compress(PrivilegeCustomerCode) from &country._tgt_concept_mbrs)
+and country="&country."
+group by PrivilegeCustomerCode, concept;
+quit;
+
+proc sql;
+create table &lib..&country._target_cross_concept_metric as
+select distinct concept,
+count(distinct PrivilegeCustomerCode) as Members,
+sum(spend) as Spend,
+sum(spend)/sum(transactions) as ATV
+from &country.tgt_concept_mbr_tran
+group by concept;
+quit;
+
+%mend;
+
+%crossconcept(AE);
+%crossconcept(SA);
+%crossconcept(OM);
+%crossconcept(JO);
+%crossconcept(KW);
+%crossconcept(QA);
+%crossconcept(BH);
+
+
+
+
+/************	TERRITORY WISE RFM SEGMENTS DISTRIBUTION  *************/
+
+%macro rfm(country); 
+
+proc sql;
+create table &prefix._&country._total_mbr_seg as
+select distinct RFM_N,
+count(distinct PrivilegeCustomerCode) as &prefix._Members
+from lib_&country..&country._rfm_seg_&rfm_period. 
+where compress(PrivilegeCustomerCode) in 
+(select compress(PrivilegeCustomerCode) from &lib..&prefix._mbr_tran)
+group by 1;
+quit;
+
+proc sql;
+create table &prefix._&country._Mbr_across_RFM as
+select distinct RFM_N,
+count(distinct PrivilegeCustomerCode) as &country._Total_Members
+from lib_&country..&country._rfm_seg_&rfm_period. 
+group by 1;
+quit;
+ 
+proc sql ;
+create table &country._&prefix._Mbr_RFM as
+select a.*,b.&country._Total_Members
+from &prefix._&country._total_mbr_seg  a left join  &prefix._&country._Mbr_across_RFM b
+on a.RFM_N=b.RFM_n;
+quit;
+ 
+proc sql;
+create table &lib..&country._&prefix._Mbr_RFM_metric as
+select *,
+(&prefix._Members)/sum(&prefix._Members) as Percent_&prefix.,
+(&country._Total_Members)/sum(&country._Total_Members) as Percent_&country.,
+(&country._Total_Members)-(&prefix._Members) as Non_&prefix._Members
+from &country._&prefix._Mbr_RFM;
+quit;
+
+%mend;
+
+%rfm(AE);
+%rfm(JO);
+%rfm(KW);
+%rfm(QA);
+%rfm(BH);
+%rfm(SA);
+%rfm(OM);
+
+
+
+/*******************	DISTRIBUTING MEMBERS BY PROMOTION RESPONSIVENESS	******************/
+
+proc sql;
+create table &prefix._valid_mbr_list as
+select distinct PrivilegeCustomerCode,country,
+sum(AmountCurrency) as Spend,
+count(distinct tran_id) as Transactions
+from &lib..&prefix._mbr_tran
+group by PrivilegeCustomerCode,country;
+quit;
+
+data &prefix._valid_mbr_list_;
+set &prefix._valid_mbr_list;
+where Transactions >= 3;
+run;
+
+proc sql;
+create table &prefix._promo_mbrlist_basic as
+select distinct PrivilegeCustomerCode,Itemsalesstatus,country,
+sum(AmountCurrency) as Spend,
+count(distinct tran_id) as Transactions
+from &lib..&prefix._mbr_tran
+where PrivilegeCustomerCode in 
+(select distinct PrivilegeCustomerCode from &prefix._valid_mbr_list_)
+group by PrivilegeCustomerCode,Itemsalesstatus,country;
+quit;
+ 
+proc freq data=&prefix._promo_mbrlist_basic;
+tables Itemsalesstatus;
+run;
+ 
+proc sort data=&prefix._promo_mbrlist_basic;
+by PrivilegeCustomerCode Country;
+run;
+
+proc transpose data=&prefix._promo_mbrlist_basic out=&prefix._promo_mbrlist_basic_t prefix=spend;
+by PrivilegeCustomerCode Country;
+id ItemSalesStatus;
+var Spend;
+run;
+ 
+data &prefix._promo_mbrlist_basic_t1;
+set &prefix._promo_mbrlist_basic_t;
+if spendSO="." then SOflag=1;
+else if spendRS="." then RSflag=1;
+if spendSO=0 then spendSO=1;
+if spendRS=0 then spendRS=1;
+Promo_Ratio=spendSO/spendRS;
+run;
+ 
+data &prefix._promo_mbrlist_basic_t2;
+set &prefix._promo_mbrlist_basic_t1;
+length Member_type $ 50;
+if Promo_ratio ge 2 then Member_type="Bargain Hunters";
+if Promo_ratio ge 0.8 AND Promo_ratio lt 2 then Member_type="Promotionally Average";
+if Promo_ratio ge 0 AND Promo_ratio lt 0.8 then Member_type="Promotion Indifferent";
+if SOflag eq 1 then Member_type="Only Regular Buyers";
+if RSflag eq 1 then Member_type="Bargain Hunters";
+run;
+ 
+proc sql;
+create table &prefix._promo_mbrlist_basic_t3 as
+select * from &prefix._promo_mbrlist_basic_t2
+where Member_type <> "";
+quit;
+
+proc freq data=&prefix._promo_mbrlist_basic_t3;
+tables Member_type;
+run;
+ 
+proc sql;
+create table &lib..&prefix._promo_segments_rfm_metric as
+select distinct Country,Member_type,
+count (distinct PrivilegeCustomerCode) as Mbrs
+from &prefix._promo_mbrlist_basic_t3
+group by Country,Member_type;
+quit;
+
+
+
+
+/***************		CHURN ANALYSIS		*********************/
+
+%macro churn(country);
+
+proc sql;
+create table &country._&prefix._Q1_new_mbr_enrollment as
+select distinct PrivilegeCustomerCode,Quarter
+from &new_mbr_LMG.
+where compress(concept_CP)=compress(&concept.)
+and compress(country)=compress("&country.")
+and &min_date. <= tran_date <= &max_date.
+and Quarter="Q1_FY12_13";
+quit;
+
+proc sql;
+create table &country._&prefix._Q1_new_mbr_enroll_tran as
+select distinct PrivilegeCustomerCode,tran_date,month,
+sum(AmountCurrency) as Spend
+from &lib..&prefix._mbr_tran 
+where compress(PrivilegeCustomerCode) in 
+(select distinct compress(PrivilegeCustomerCode) from &country._&prefix._Q1_new_mbr_enrollment)
+group by 1,2,3;
+quit;
+
+data &country._&prefix._Q1_new_mbr_enroll_qtr(drop=month tran_date);
+set &country._&prefix._Q1_new_mbr_enroll_tran;
+if 7<=month<=9 then quarter="Q1_FY12_13";
+else if 10<=month<=12 then quarter="Q2_FY12_13";
+else if 1<=month<=3 then quarter="Q3_FY12_13";
+else quarter="False";
+run;
+ 
+proc sort data=&country._&prefix._Q1_new_mbr_enroll_qtr;
+by PrivilegeCustomerCode;
+quit;
+
+proc sql;
+create table &country._&prefix._Q1_new_mbr_incr_basic as
+select quarter,
+count(distinct PrivilegeCustomerCode) as Mbrs,
+sum(Spend) As Tot_Spend,
+(calculated Tot_Spend)/(calculated Mbrs) as Spend_per_Member
+from &country._&prefix._Q1_new_mbr_enroll_qtr
+group by 1;
+quit;
+
+proc sql ;
+create table &country._&prefix._new_mbr_enroll_qtr_ as
+select distinct PrivilegeCustomerCode,quarter,
+count ( distinct quarter )as qtr_count
+from &country._&prefix._Q1_new_mbr_enroll_qtr
+group by PrivilegeCustomerCode;
+quit;
+ 
+proc transpose data=&country._&prefix._new_mbr_enroll_qtr_ out =&country._&prefix._new_mbr_enroll_qtr_t(drop=_name_) ;
+by  PrivilegeCustomerCode ;
+id quarter;
+var qtr_count;
+run;
+ 
+data &country._&prefix._new_mbr_enroll_qtr_t_(drop=i );
+set &country._&prefix._new_mbr_enroll_qtr_t;
+array zero{*} _numeric_; 
+do i=1 to dim(zero); 
+if compress(zero(i))=. then zero(i)=0;
+else zero(i)=1; 
+end; 
+run;
+
+proc sql;
+create table &country._q1 as
+select count(distinct PrivilegeCustomerCode) as Members,"Q1_FY12_13" as Quarter 
+from &country._&prefix._new_mbr_enroll_qtr_t_
+where Q1_FY12_13 = 1;
+quit;
+
+proc sql;
+create table &country._q2 as
+select count(distinct PrivilegeCustomerCode) as Members,"Q2_FY12_13" as Quarter
+from &country._&prefix._new_mbr_enroll_qtr_t_
+where (Q1_FY12_13 = 1) and (Q2_FY12_13 = 1);
+quit;
+
+proc sql;
+create table &country._q3 as
+select count(distinct PrivilegeCustomerCode) as Members,"Q3_FY12_13" as Quarter
+from &country._&prefix._new_mbr_enroll_qtr_t_
+where (Q1_FY12_13 = 1) and (Q3_FY12_13 = 1);
+quit;
+
+proc sql;
+create table &country._q1_churned as
+select count(distinct PrivilegeCustomerCode) as Members,"Q1 churn" as Quarter
+from &country._&prefix._new_mbr_enroll_qtr_t_
+where (Q1_FY12_13 = 1) and (Q2_FY12_13 = 0)
+and (Q3_FY12_13 = 0);
+quit;
+
+data &country._&prefix._churned_member;
+length Quarter $20.;
+set &country._q1 &country._q2 &country._q3 &country._q1_churned;
+run;
+
+proc sql;
+create table &country._&prefix._churned_member_ as
+select a.*,b.Spend_per_Member
+from &country._&prefix._churned_member a left join &country._&prefix._Q1_new_mbr_incr_basic b 
+on a.quarter=b.quarter;
+quit;
+
+proc sql;
+create table &lib..&country._&prefix._churned_member_metric as
+select *,
+(case
+when Quarter = 'Q1_FY12_13' then 1
+when Quarter = 'Q2_FY12_13' then 2
+when Quarter = 'Q3_FY12_13' then 3
+else 4
+end) as Sorter
+from &country._&prefix._churned_member_
+order by Sorter;
+quit;
+
+%mend;
+
+%churn(SA);
+%churn(AE);
+%churn(QA);
+%churn(KW);
+%churn(OM);
+%churn(JO);
+%churn(BH);
+
+
+
+/********************  NEW MEMBER ENROLLMENTS  ************************/
+
+proc sql;
+create table &prefix._new_mbr_concept as
+select distinct country,
+count(distinct PrivilegeCustomerCode) as NewMembers
+from &new_mbr_LMG.
+where compress(concept_CP)=compress(&concept.) 
+and &min_date. <=tran_date<= &max_date.
+group by country;
+quit;
+
+proc sql;
+create table new_mbr_overall as
+select distinct country,
+count(distinct PrivilegeCustomerCode) as TotalNewMembers
+from &new_mbr_LMG.
+where &min_date. <=tran_date<= &max_date.
+group by country;
+quit;
+
+
+/*NEW MEMBER ENROLLMENTS IN MBR AFFINITY SLIDE*/
+proc sql;
+create table &lib..&prefix._new_mbr_overall_metric as
+select a.*,b.TotalNewMembers,
+(a.NewMembers/b.TotalNewMembers) format 8.4 as NewMember_Pct
+from &prefix._new_mbr_concept a inner join new_mbr_overall b
+on a.country=b.country;
+quit;
+
+
+
+/**************		REPEAT PURCHASE BEHAVIOUR	***************/
+
+%macro tripspend(cntry);
+proc sql;
+create table &cntry._&prefix._mbr_trips as
+select PrivilegeCustomerCode, 
+count(distinct Trip_Id) as mbr_trips, 
+sum(AmountCurrency) as mbr_spend
+from &lib..&prefix._mbr_tran
+where upcase(compress(country))="&cntry."
+group by PrivilegeCustomerCode;
+quit;
+ 
+proc sql;
+create table &cntry._&prefix._mbr_trips_dist as
+select distinct mbr_trips, 
+count(distinct PrivilegeCustomerCode) as members,
+sum(mbr_spend) as trip_spend, 
+sum(mbr_spend)/count(distinct PrivilegeCustomerCode) as trip_spend_per_mbr
+from &cntry._&prefix._mbr_trips
+group by mbr_trips;
+quit;
+
+data &cntry._&prefix._mbr_trips_dist1;
+set &cntry._&prefix._mbr_trips_dist;
+length trips $10; 
+if mbr_trips in (1,2) then trips="1-2";
+else if mbr_trips in (3,4) then trips="3-4";
+else if mbr_trips in (5,6) then trips="5-6";
+else if mbr_trips in (7,8) then trips="7-8";
+else if mbr_trips >8 then trips=">8";
+run;
+
+proc sql;
+create table &lib..&cntry._&prefix._tripspend_metric as
+select distinct trips,
+sum (members) as Members,
+sum (trip_spend) as Spend,
+avg (trip_spend_per_mbr) as SpendperMember
+from &cntry._&prefix._mbr_trips_dist1
+group by trips;
+quit;
+
+%mend;
+
+%tripspend(AE);
+%tripspend(SA);
+%tripspend(OM);
+%tripspend(JO);
+%tripspend(KW);
+%tripspend(QA);
+%tripspend(BH);
+
