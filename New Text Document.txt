@@ -1,0 +1,143 @@
+proc import out= work.cluster ;
+datafile= "C:\Desktop\cluster.csv" 
+dbms=csv replace; getnames=yes; datarow=2; 
+run;
+
+
+
+DATA WORK.cluster;
+LENGTH
+StoreNum 8
+Cat1 8
+Cat2 8
+Cat3 8
+Cat4 8
+Size 8
+Sale 8
+State $ 2 ;
+FORMAT
+StoreNum BEST12.
+Cat1 BEST12.
+Cat2 BEST12.
+Cat3 BEST12.
+Cat4 BEST12.
+Size BEST12.
+Sale BEST12.
+State $CHAR2. ;
+INFORMAT
+StoreNum BEST12.
+Cat1 BEST12.
+Cat2 BEST12.
+Cat3 BEST12.
+Cat4 BEST12.
+Size BEST12.
+Sale BEST12.
+State $CHAR2. ;
+INFILE 'F:\SAS\temp\work\_TD12532_AUSTLAPPWD0020_\#LN00038'
+LRECL=31
+ENCODING="WLATIN1"
+TERMSTR=CRLF
+DLM='7F'x
+MISSOVER
+DSD ;
+INPUT
+StoreNum : BEST32.
+Cat1 : BEST32.
+Cat2 : BEST32.
+Cat3 : BEST32.
+Cat4 : BEST32.
+Size : BEST32.
+Sale : BEST32.
+State : $CHAR2. ;
+RUN;
+
+
+
+/*************************************************
+Outlier treatment
+
+**************************************************/
+
+%macro pctlcap(input=, output=, class=none, vars=, pctl=1 95);
+%if &output = %then %let output = &input;
+%let varL=;
+%let varH=;
+%let xn=1;
+
+%do %until (%scan(&vars,&xn)= );
+%let token = %scan(&vars,&xn);
+%let varL = &varL &token.L;
+%let varH = &varH &token.H;
+%let xn=%EVAL(&xn + 1);
+%end;
+
+%let xn=%eval(&xn-1);
+data xtemp;
+set &input;
+run;
+%if &class = none %then %do;
+data xtemp;
+set xtemp;
+xclass = 1;
+run;
+%let class = xclass;
+%end;
+proc sort data = xtemp;
+by &class;
+run;
+proc univariate data = xtemp noprint;
+by &class;
+var &vars;
+output out = xtemp_pctl PCTLPTS = &pctl PCTLPRE = &vars PCTLNAME = L H;
+run;
+data &output;
+merge xtemp xtemp_pctl;
+by &class;
+array trimvars{&xn} &vars;
+array trimvarl{&xn} &varL;
+array trimvarh{&xn} &varH;
+
+do xi = 1 to dim(trimvars);
+if not missing(trimvars{xi}) then do;
+if (trimvars{xi} < trimvarl{xi}) then trimvars{xi} = trimvarl{xi};
+if (trimvars{xi} > trimvarh{xi}) then trimvars{xi} = trimvarh{xi};
+end;
+end;
+drop &varL &varH xclass xi;
+run;
+
+%mend pctlcap;
+
+%pctlcap(input=cluster, output=result, class=none, vars = Cat1 Cat2 Cat3 Cat4, pctl=1 95);
+data result1;
+set result;
+SPSQFS= sale/size;
+run;
+proc univariate data= result1;
+var Cat1 Cat2 Cat3 Cat4 SPSQFS;
+run;
+proc cluster data=result method=centroid ccc pseudo out= tree;
+var cat1--sale;
+copy StoreNum;
+run;
+
+proc tree data = tree noprint nclusters=3 out=out;
+copy cat1--sale;
+run;
+
+
+%macro kmean(K);
+proc fastclus data=result1 out=outdata&K. maxclusters= &K. maxiter=100 converge=0;
+var cat1--sale spsqfs;
+run;
+%mend;
+%kmean(2);
+%kmean(3);
+%kmean(4);
+
+/*Three cluster is the optimum cluster because post that The pseudo-F statistic that is*/
+/*intended to capture the 'tightness' of clusters, and is in essence a ratio of the mean */
+/*sum of squares between groups to the mean sum of squares within group goes down.*/
+
+/*CCC to increase to a maximum as we increment the number of clusters to 3 and it is at -4.119 post that */
+/*there is a decrease so we take the number of clusters at 3 based on (local) maximum. */
