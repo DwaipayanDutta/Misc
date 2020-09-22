@@ -1,11 +1,6 @@
-## Author: Rajesh Jakhotia
-## Company Name: K2 Analytics Finishing School Pvt. Ltd
-## Email : ar.jakhotia@k2analytics.co.in
-## Website : k2analytics.co.in
-
 
 ## Let us first set the working directory path
-setwd ("D:/K2Analytics/Neural_Network/")
+setwd ("D:/Neural_Network/")
 getwd()
 
 
