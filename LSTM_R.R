@@ -2,11 +2,29 @@
 # Tensor flow Error Read below
 # https://stackoverflow.com/questions/44611325/r-keras-package-error-python-module-tensorflow-contrib-keras-python-keras-was-n
 # Data : https://www.kaggle.com/c/quora-insincere-questions-classification/data
-rm(list=ls())
-load.libraries <- c('tidyverse', "tidytext","keras",'data.table', 'tensorflow')
-install.lib <- load.libraries[!load.libraries %in% installed.packages()]
-for(libs in install.lib) install.packages(libs, dependences = TRUE)
-suppressPackageStartupMessages(sapply(load.libraries, require, character = TRUE))
+# Function to clear the environment
+clear_environment <- function() {
+  rm(list = ls())
+}
+install_missing_libraries <- function(libraries) {
+  libraries_to_install <- libraries[!(libraries %in% installed.packages()[, 'Package'])]
+  if (length(libraries_to_install) > 0) {
+    install.packages(libraries_to_install, dependencies = TRUE)
+  }
+}
+load_libraries <- function(libraries) {
+  invisible(lapply(libraries, library, character.only = TRUE, quietly = TRUE))
+}
+setup_environment <- function(libraries) {
+  clear_environment()
+  install_missing_libraries(libraries)
+  load_libraries(libraries)
+}
+required_libraries <- c('tidyverse', 'tidytext', 'keras', 'data.table', 'tensorflow')
+setup_environment(required_libraries)
+
+
+
 
 options(scipen=999) # turn off scientific display
 
